@@ -23,7 +23,8 @@ public class RelatedWordMapping {
     @JoinColumns({@JoinColumn(name = "channel"),
             @JoinColumn(name = "days"),
             @JoinColumn(name = "priority"),
-            @JoinColumn(name = "program")})
+            @JoinColumn(name = "program"),
+            @JoinColumn(name = "wordClass")})
     private RelatedWord relatedWord = null;
 
     @Override
@@ -36,7 +37,8 @@ public class RelatedWordMapping {
         RelatedWordMapping relatedWordMapping = (RelatedWordMapping) o;
         return Objects.equals(contentId, relatedWordMapping.getContentId()) &&
                 Objects.equals(contentsetId, relatedWordMapping.getContentsetId()) &&
-                Objects.equals(relatedWord.getPriority(), relatedWordMapping.getRelatedWord().getPriority());
+                Objects.equals(relatedWord.getPriority(), relatedWordMapping.getRelatedWord().getPriority()) &&
+                Objects.equals(relatedWord.getWordClass(), relatedWordMapping.getRelatedWord().getWord());
 
     }
 

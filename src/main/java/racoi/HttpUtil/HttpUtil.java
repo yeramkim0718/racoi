@@ -1,15 +1,14 @@
 package racoi.HttpUtil;
 
-import org.codehaus.jettison.json.JSONException;
 import org.codehaus.jettison.json.JSONObject;
-import org.springframework.batch.core.configuration.xml.ExceptionElementParser;
 
-import java.io.*;
-import java.net.*;
-import java.nio.charset.StandardCharsets;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.SocketTimeoutException;
+import java.net.URL;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
 
 public class HttpUtil {
 
@@ -203,4 +202,5 @@ public class HttpUtil {
         }
         return res;
     }
+
 }

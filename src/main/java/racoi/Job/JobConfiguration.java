@@ -1,17 +1,18 @@
 package racoi.Job;
 
+import com.fasterxml.jackson.databind.deser.DataFormatReaders;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.codehaus.jettison.json.JSONArray;
 import org.codehaus.jettison.json.JSONException;
 import org.codehaus.jettison.json.JSONObject;
-import org.junit.internal.runners.statements.Fail;
-import org.openqa.selenium.By;
+import org.openqa.selenium.*;
 import org.openqa.selenium.NoSuchElementException;
-import org.openqa.selenium.WebDriver;
-import org.openqa.selenium.WebElement;
 import org.openqa.selenium.chrome.ChromeDriver;
 import org.openqa.selenium.chrome.ChromeOptions;
+import org.openqa.selenium.logging.LogEntries;
+import org.openqa.selenium.logging.LogEntry;
+import org.openqa.selenium.logging.LogType;
 import org.openqa.selenium.support.ui.ExpectedConditions;
 import org.openqa.selenium.support.ui.WebDriverWait;
 import org.springframework.batch.core.Job;
@@ -22,10 +23,24 @@ import org.springframework.batch.core.launch.support.RunIdIncrementer;
 import org.springframework.batch.repeat.RepeatStatus;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
 import racoi.Dto.*;
-import racoi.Repository.*;
 import racoi.HttpUtil.HttpUtil;
+import racoi.Repository.*;
+import racoi.Service.AmazonS3Service;
 
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.parsers.ParserConfigurationException;
+import javax.xml.transform.OutputKeys;
+import javax.xml.transform.Transformer;
+import javax.xml.transform.TransformerException;
+import javax.xml.transform.TransformerFactory;
+import javax.xml.transform.dom.DOMSource;
+import javax.xml.transform.stream.StreamResult;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.*;
@@ -49,11 +64,13 @@ public class JobConfiguration {
     private final CompreBuzzMappingRepository compreBuzzMappingRepository;
     private final RelatedWordMappingRepository relatedWordMappingRepository;
 
+    private final AmazonS3Service amazonS3Service;
+
     @Bean
     public Job internet_job() {
         return jobBuilderFactory.get("internet_job")
                 .incrementer(new RunIdIncrementer())
-                .start(mapping_relatedWord())
+                .start(save_file_relatedWord())
                 /*.start(crawling_internetBuzz())
                 .on("COMPLETED")
                 .to(crawling_internetBuzz_detail())
@@ -86,51 +103,75 @@ public class JobConfiguration {
                 .on("*")
                 .to(updating_related_word_detail())
 
-                .from(mapping_relatedWord())
-                .on("FAILED")
+                .from(mapping_internetBuzz())
+                .on("COMPLETED")
                 .to(mapping_relatedWord())
 
+                .from(mapping_internetBuzz())
+                .on("*")
+                .to(mapping_internetBuzz())
+
+                .from(mapping_relatedWord())
+                .on("COMPLETED")
+                .to(save_file_internetBuzz())
+
                 .from(mapping_relatedWord())
                 .on("*")
-                .end()
-                .end() // JOB 종료*/
-                .build();
+                .to(mapping_relatedWord())
 
-    }
-
-    @Bean
-    public Job compre_job() {
-        return jobBuilderFactory.get("compre_job")
-                .incrementer(new RunIdIncrementer())
-
-                .start(crawling_compreBuzz())
+                .from(save_file_internetBuzz())
                 .on("COMPLETED")
-                .to(crawling_compreBuzz_detail())
+                .to(save_file_relatedWord())
 
-                .from(crawling_compreBuzz())
+                .from(save_file_internetBuzz())
                 .on("*")
-                .to(crawling_compreBuzz())
+                .to(save_file_internetBuzz())
 
-                .from(crawling_compreBuzz_detail())
-                .on("COMPLETED")
-                .to(mapping_compreBuzz())
-
-                .from(crawling_compreBuzz_detail())
-                .on("*")
-                .to(crawling_compreBuzz_detail())
-
-                .from(mapping_compreBuzz())
+                .from(save_file_relatedWord())
                 .on("FAILED")
-                .to(mapping_compreBuzz())
+                .to(save_file_relatedWord())
 
-                .from(mapping_compreBuzz())
+                .from(save_file_relatedWord())
                 .on("*")
                 .end()
-                .end() // JOB 종료
+                .end()*/
                 .build();
 
     }
+    /*
+        @Bean
+        public Job compre_job() {
+            return jobBuilderFactory.get("compre_job")
+                    .incrementer(new RunIdIncrementer())
 
+                    .start(crawling_compreBuzz())
+                    .on("COMPLETED")
+                    .to(crawling_compreBuzz_detail())
+
+                    .from(crawling_compreBuzz())
+                    .on("*")
+                    .to(crawling_compreBuzz())
+
+                    .from(crawling_compreBuzz_detail())
+                    .on("COMPLETED")
+                    .to(mapping_compreBuzz())
+
+                    .from(crawling_compreBuzz_detail())
+                    .on("*")
+                    .to(crawling_compreBuzz_detail())
+
+                    .from(mapping_compreBuzz())
+                    .on("FAILED")
+                    .to(mapping_compreBuzz())
+
+                    .from(mapping_compreBuzz())
+                    .on("*")
+                    .end()
+                    .end() // JOB 종료
+                    .build();
+
+        }
+    */
     private boolean compare_date(JSONObject detail, String buzz_startDate) {
         boolean res = false;
 
@@ -202,6 +243,15 @@ public class JobConfiguration {
         return res;
     }
 
+    private String convert_specialChars(String word) {
+        String convert = word.replace("&","&amp;")
+                .replace("<","&lt;")
+                .replace(">","&gt;")
+                .replace("'","&apos;")
+                .replace("\"","&quot;") ;
+        return convert;
+    }
+
     @Bean
     public Step mapping_internetBuzz() {
         return stepBuilderFactory.get("mapping_internetBuzz")
@@ -209,7 +259,7 @@ public class JobConfiguration {
                     List<InternetBuzz> buzzes = internetBuzzRepository.findAll();
 
                     HttpUtil http = new HttpUtil();
-                    if(!http.initService(10000, 10)) {
+                    if (!http.initService(3000, 10)) {
                         System.out.println("call initService fail");
                     }
 
@@ -223,7 +273,7 @@ public class JobConfiguration {
                     for (InternetBuzz buzz : buzzes) {
                         n_search_call++;
 
-                        JSONObject search = http.call_searchAPI(buzz.getProgram(), 5000, 5);
+                        JSONObject search = http.call_searchAPI(buzz.getProgram(), 3000, 2);
 
                         // 응답이 200이 아닌 경우
                         if (search == null) {
@@ -246,16 +296,16 @@ public class JobConfiguration {
 
                                 if (buzz.getProgram().replace(" ", "").equals(title.replace(" ", ""))) {
                                     n_detail_call++;
-                                    boolean check = buzz.presentContentIdInMappings(content_id);
-                                    if(!check) {
+
+                                    if (!buzz.presentContentIdInMappings(content_id)) {
                                         InternetBuzzMapping n_mapping = new InternetBuzzMapping();
                                         n_mapping.setInternetBuzz(buzz);
-                                        n_mapping.setContentId(content_id);
-                                        n_mapping.setContentsetId(content_set_id);
+                                        n_mapping.setContentId(convert_specialChars(content_id));
+                                        n_mapping.setContentsetId(convert_specialChars(content_set_id));
                                         internetBuzzMappingRepository.save(n_mapping);
                                     }
 
-                                    /*JSONObject detail = http.call_detailAPI(content_set_id, content_id, 5000, 5);
+                                    /*JSONObject detail = http.call_detailAPI(content_set_id, content_id, 3000, 2);
 
                                     if (detail != null && detail.getString("message").equals("OK")) {
                                         n_detail++;
@@ -290,15 +340,11 @@ public class JobConfiguration {
                                             internetBuzzMappingRepository.save(n_mapping);
 
                                         } else {
-                                            //System.out.println(buzz.getProgram());
                                             //System.out.println(content_set_id + "|" + content_id);
                                         }
-                                        // 기타
                                     } else {
-                                        //System.out.println(buzz.getProgram());
-                                        //System.out.println(content_set_id + "|" + content_id);
-                                    }*/
-                                } else {
+                                        //System.out.println(detail);
+                                    } */
                                 }
                             }
                         }
@@ -312,9 +358,7 @@ public class JobConfiguration {
                     System.out.println("cast mapping : " + n_cast);
                     return RepeatStatus.FINISHED;
 
-                }).
-
-                build();
+                }).build();
 
     }
 
@@ -325,7 +369,7 @@ public class JobConfiguration {
                     List<CompreBuzz> buzzes = compreBuzzRepository.findAll();
 
                     HttpUtil http = new HttpUtil();
-                    http.initService(10000, 10);
+                    http.initService(3000, 10);
 
                     int n_search_call = 0;
                     int n_search_not_ok = 0;
@@ -337,7 +381,7 @@ public class JobConfiguration {
                     for (CompreBuzz buzz : buzzes) {
                         n_search_call++;
 
-                        JSONObject search = http.call_searchAPI(buzz.getProgram(), 5000, 5);
+                        JSONObject search = http.call_searchAPI(buzz.getProgram(), 3000, 2);
                         //TimeUnit.SECONDS.sleep(1);
 
                         // 응답이 200이 아닌 경우
@@ -365,17 +409,14 @@ public class JobConfiguration {
                                     n_detail_call++;
 
                                     if (!check) {
-                                        n_date++;
                                         CompreBuzzMapping mapping = new CompreBuzzMapping();
-                                        mapping.setContentId(content_id);
-                                        mapping.setContentsetId(content_set_id);
+                                        mapping.setContentId(convert_specialChars(content_id));
+                                        mapping.setContentsetId(convert_specialChars(content_set_id));
                                         mapping.setCompreBuzz(buzz);
-
-                                        if (!buzz.getMappings().contains(mapping)) {
-                                            compreBuzzMappingRepository.save(mapping);
-                                        }
+                                        compreBuzzMappingRepository.save(mapping);
                                     }
-                                    /*JSONObject detail = http.call_detailAPI(content_set_id, content_id, 5000, 5);
+
+                                    /*JSONObject detail = http.call_detailAPI(content_set_id, content_id, 3000, 2);
 
                                     if (detail != null && detail.getString("message").equals("OK")) {
                                         n_detail++;
@@ -458,14 +499,13 @@ public class JobConfiguration {
 
                             if (!word.presentContentIdAndPriorityInMappings(contentId, word.getPriority())) {
                                 RelatedWordMapping wordMapping = new RelatedWordMapping();
-                                wordMapping.setContentId(contentId);
-                                wordMapping.setContentsetId(contentSetId);
+                                wordMapping.setContentId(convert_specialChars(contentId));
+                                wordMapping.setContentsetId(convert_specialChars(contentSetId));
                                 wordMapping.setRelatedWord(word);
                                 relatedWordMappingRepository.save(wordMapping);
                             }
                         }
                     }
-
                     return RepeatStatus.FINISHED;
 
                 }).build();
@@ -479,6 +519,8 @@ public class JobConfiguration {
                     System.setProperty("webdriver.chrome.driver", "chromedriver_win32_96.exe");
                     ChromeOptions options = new ChromeOptions();
                     options.addArguments("headless");
+                    options.addArguments("--disable-popup-blocking"); // 팝업 무시
+                    options.addArguments("--disable-default-apps"); // 기본앱 사용안함
                     WebDriver driver = new ChromeDriver(options);
                     driver.get("https://www.racoi.or.kr/kobaco/nreport/ibuzz.do");
 
@@ -585,7 +627,6 @@ public class JobConfiguration {
                 })
                 .build();
     }
-
 
     @Bean
     public Step crawling_compreBuzz() {
@@ -723,94 +764,162 @@ public class JobConfiguration {
         return stepBuilderFactory.get("crawling_relatedWords")
                 .tasklet((contribution, chunkContext) -> {
 
-                    relatedWordRepository.deleteAll();
                     System.setProperty("webdriver.chrome.driver", "chromedriver_win32_96.exe");
                     ChromeOptions options = new ChromeOptions();
+                    options.addArguments("headless");
+                    options.addArguments("--disable-popup-blocking"); // 팝업 무시
+                    options.addArguments("--disable-default-apps"); // 기본앱 사용안함
                     WebDriver driver = new ChromeDriver(options);
                     WebDriverWait wait = new WebDriverWait(driver, 10);
 
                     driver.get("https://www.racoi.or.kr/kobaco/nreport/weekmorp.do");
-                    driver.manage().window().maximize();
 
                     WebElement table = driver.findElement(By.id("morplist"));
                     wait.until(ExpectedConditions.visibilityOfElementLocated(By.id("morplist")));
                     List<WebElement> rows = table.findElements(By.tagName("tr"));
 
-                    WebElement adjective = driver.findElement(By.id("graph_btn_Adjective"));
+                    JavascriptExecutor js = (JavascriptExecutor) driver;
 
-                    while (!adjective.getAttribute("class").equals("btn_select on")) {
-                        adjective.click();
-                    }
-
-                    String pre_value = "-1";
                     for (WebElement row : rows) {
-
-                        String channel;
-                        String days;
                         String program = row.findElement(By.className("m02b_tb01")).getText();
+                        String program_ = program;
+                        String channel = row.findElement(By.className("m02b_tb02")).getText();
+                        String days = row.findElement(By.className("m02b_tb03")).getText();
+                        String pseq = row.findElement(By.className("m02b_tb01")).findElement(By.tagName("a")).getAttribute("href").split(",")[0].replace("javascript:showMG(","");
 
-                        if (program.startsWith("* ")) {
-                            program = program.replace("* ", "");
+                        if (program_.startsWith("* ")) {
+                            program_ = program.replace("* ", "");
                         }
 
-                        if (program.startsWith(" * ")) {
-                            program = program.replace(" * ", "");
+                        if (program_.startsWith(" * ")) {
+                            program_ = program.replace(" * ", "");
                         }
 
-                        if (program.startsWith(" *")) {
-                            program = program.replace(" *", "");
+                        if (program_.startsWith(" *")) {
+                            program_ = program.replace(" *", "");
                         }
 
-                        if (program.endsWith("(종영)")) {
-                            program = program.replace("(종영)", "");
+                        if (program_.endsWith("(종영)")) {
+                            program_ = program.replace("(종영)", "");
                         }
 
-                        channel = row.findElement(By.className("m02b_tb02")).getText();
-                        days = row.findElement(By.className("m02b_tb03")).getText();
+                        /*형용사 */
+                        js.executeScript("makeMorpGraph("+pseq+",'"+program+"', 'Adjective')");
 
-                        String item_value;
-                        List<WebElement> items;
+                        WebElement graph_01 = driver.findElement(By.id("graph_01"));
+                        List<WebElement> menuitems = graph_01.findElements(By.xpath("//*[starts-with(@role,'menuitem')]"));
+                        List<WebElement> e_words = graph_01.findElements(By.tagName("tspan"));
+                        List<Double> cnts = new ArrayList<Double>();
+                        ArrayList<String> words = new ArrayList<String> ();
 
-                        do {
-                            row.findElement(By.className("m02b_tb01")).click();
-                            driver.manage().timeouts().implicitlyWait(3, TimeUnit.SECONDS);
-                            WebElement graph = driver.findElement(By.id("graph_01"));
-                            items = graph.findElements(By.xpath("//*[starts-with(@role,'menuitem')]"));
-                            items.get(0).click();
-                            item_value = items.get(0).findElement(By.tagName("desc")).getText();
+                        for(int i =0;i<menuitems.size();i++) {
+                            WebElement menuitem = menuitems.get(i);
+                            String path = menuitem.findElement(By.tagName("path")).getAttribute("d");
+                            String regEx = "L0,[0-9]*.[0-9]*";
+                            Pattern pat = Pattern.compile(regEx);
+                            Matcher match = pat.matcher(path);
 
-                        } while (item_value.equals(pre_value));
-
-                        for (int j = 0; j < items.size(); j++) {
-
-                            String desc;
-                            items.get(j).click();
-                            try {
-                                desc = items.get(j).findElement(By.tagName("desc")).getText();
-                            }catch (NoSuchElementException e) {
-                                j--;
-                                continue;
+                            if(match.find()) {
+                                cnts.add(Double.parseDouble(match.group().replace("L0,","")));
                             }
-                            String[] words = items.get(j).findElement(By.tagName("desc")).getText().split(" ");
+                        }
 
-                            String amount = words[0];
-                            String word = words[1];
+                        double min =99999;
+                        double max = 0;
+                        for (int i =0; i<e_words.size(); i++) {
+                            WebElement word = e_words.get(i);
 
+                            Pattern pat1 = Pattern.compile("[0-9]+");
+                            Matcher match1 = pat1.matcher(word.getText().replace(",",""));
+
+                            if(match1.find()){
+                                int num = Integer.parseInt(match1.group());
+                                if (num< min) {
+                                    min = num;
+                                } else if (num > max) {
+                                    max = num;
+                                }
+                            }
+
+                            Pattern pat2 = Pattern.compile("^[가-힣]+$");
+                            Matcher match2 = pat2.matcher(word.getText());
+
+                            if(match2.find()) {
+                                words.add(match2.group());
+                            }
+                        }
+
+                        for (int i =0;i<words.size();i++) {
                             RelatedWord relatedWord = new RelatedWord();
-                            relatedWord.setProgram(program);
+                            relatedWord.setProgram(program_);
                             relatedWord.setChannel(channel);
                             relatedWord.setDays(days);
-                            relatedWord.setPriority(String.valueOf(j + 1));
-                            relatedWord.setWord(word);
-                            relatedWord.setAmount(amount);
+                            relatedWord.setPriority(String.valueOf(i + 1));
+                            relatedWord.setWord(words.get(i));
+                            relatedWord.setWordClass("Adjective");
+                            relatedWord.setAmount(String.valueOf(((int) ((max-min) * cnts.get(i)/202.0 + min))));
                             relatedWordRepository.save(relatedWord);
+                        }
 
-                            if (j != items.size() - 1) {
-                                items.get(j + 1).click();
+                        /*명사 */
+                        js.executeScript("makeMorpGraph("+pseq+",'"+program+"', 'Noun')");
+
+                        graph_01 = driver.findElement(By.id("graph_01"));
+                        menuitems = graph_01.findElements(By.xpath("//*[starts-with(@role,'menuitem')]"));
+                        e_words = graph_01.findElements(By.tagName("tspan"));
+                        cnts = new ArrayList<Double>();
+                        words = new ArrayList<String> ();
+
+                        for(int i =0;i<menuitems.size();i++) {
+                            WebElement menuitem = menuitems.get(i);
+                            String path = menuitem.findElement(By.tagName("path")).getAttribute("d");
+                            String regEx = "L0,[0-9]*.[0-9]*";
+                            Pattern pat = Pattern.compile(regEx);
+                            Matcher match = pat.matcher(path);
+
+                            if(match.find()) {
+                                cnts.add(Double.parseDouble(match.group().replace("L0,","")));
                             }
                         }
-                        pre_value = item_value;
+
+                        min =99999;
+                        max = 0;
+                        for (int i =0; i<e_words.size(); i++) {
+                            WebElement word = e_words.get(i);
+
+                            Pattern pat1 = Pattern.compile("[0-9]+");
+                            Matcher match1 = pat1.matcher(word.getText().replace(",",""));
+
+                            if(match1.find()){
+                                int num = Integer.parseInt(match1.group());
+                                if (num< min) {
+                                    min = num;
+                                } else if (num > max) {
+                                    max = num;
+                                }
+                            }
+
+                            Pattern pat2 = Pattern.compile("^[가-힣]+$");
+                            Matcher match2 = pat2.matcher(word.getText());
+
+                            if(match2.find()) {
+                                words.add(match2.group());
+                            }
+                        }
+
+                        for (int i =0;i<words.size();i++) {
+                            RelatedWord relatedWord = new RelatedWord();
+                            relatedWord.setProgram(program_);
+                            relatedWord.setChannel(channel);
+                            relatedWord.setDays(days);
+                            relatedWord.setPriority(String.valueOf(i + 1));
+                            relatedWord.setWord(words.get(i));
+                            relatedWord.setWordClass("Noun");
+                            relatedWord.setAmount(String.valueOf(((int) ((max-min) * cnts.get(i)/202.0 + min))));
+                            relatedWordRepository.save(relatedWord);
+                        }
                     }
+
                     driver.quit();
                     return RepeatStatus.FINISHED;
                 })
@@ -840,4 +949,216 @@ public class JobConfiguration {
                 })
                 .build();
     }
+
+    private Element createTextNode (Document doc, String element, String text) {
+        Element e = doc.createElement(element);
+        e.appendChild(doc.createTextNode(text));
+        return e;
+    }
+
+    @Bean
+    public Step save_file_internetBuzz() {
+        return stepBuilderFactory.get("save_file_internetBuzz")
+                .tasklet((contribution, chunkContext) -> {
+
+                    List<InternetBuzzMapping> mappings = internetBuzzMappingRepository.findAll();
+
+                    try {
+                        DocumentBuilderFactory docFactory = DocumentBuilderFactory.newInstance();
+                        DocumentBuilder docBuilder = docFactory.newDocumentBuilder();
+
+                        // 루트 엘리먼트
+                        Document doc = docBuilder.newDocument();
+                        Element root = doc.createElement("data");
+                        doc.appendChild(root);
+
+                        for (InternetBuzzMapping mapping : mappings) {
+                            InternetBuzz buzz = mapping.getInternetBuzz();
+
+                            // row element
+                            Element row = doc.createElement("row");
+                            root.appendChild(row);
+                            row.appendChild(createTextNode(doc, "href", buzz.getHref()));
+                            row.appendChild(createTextNode(doc, "program", buzz.getProgram()));
+                            row.appendChild(createTextNode(doc, "content_id", mapping.getContentId()));
+                            row.appendChild(createTextNode(doc, "contentset_id", mapping.getContentsetId()));
+                            row.appendChild(createTextNode(doc, "channel", buzz.getChannel()));
+                            row.appendChild(createTextNode(doc, "days", buzz.getDays()));
+                            row.appendChild(createTextNode(doc, "post", buzz.getPost()));
+                            row.appendChild(createTextNode(doc, "comment", buzz.getComment()));
+                            row.appendChild(createTextNode(doc, "video_view", buzz.getVideoView()));
+                            row.appendChild(createTextNode(doc, "news", buzz.getNews()));
+                            row.appendChild(createTextNode(doc, "video", buzz.getVideo()));
+                            row.appendChild(createTextNode(doc, "family", buzz.getFamily()));
+                            row.appendChild(createTextNode(doc, "detail", buzz.getDetail()));
+                            row.appendChild(createTextNode(doc, "genre", buzz.getGenre()));
+                            row.appendChild(createTextNode(doc, "start_date", buzz.getStartDate()));
+                            row.appendChild(createTextNode(doc, "end_date", buzz.getEndDate()));
+                            row.appendChild(createTextNode(doc, "director", buzz.getDirector()));
+                            row.appendChild(createTextNode(doc, "writer", buzz.getWriter()));
+                            row.appendChild(createTextNode(doc, "casts", buzz.getCasts()));
+
+                        }
+
+                        // XML 파일로 쓰기
+                        TransformerFactory transformerFactory = TransformerFactory.newInstance();
+                        Transformer transformer = transformerFactory.newTransformer();
+
+                        transformer.setOutputProperty(OutputKeys.ENCODING, "UTF-8");
+                        transformer.setOutputProperty(OutputKeys.INDENT, "yes");
+                        DOMSource source = new DOMSource(doc);
+                        StreamResult result = new StreamResult(new FileOutputStream(new File("internetbuzz.xml")));
+                        transformer.transform(source, result);
+
+                        // file upload
+                        amazonS3Service.upload("internetbuzz.xml");
+
+                    } catch (ParserConfigurationException pce) {
+                        pce.printStackTrace();
+                    } catch (TransformerException tfe) {
+                        tfe.printStackTrace();
+                    }
+                    return RepeatStatus.FINISHED;
+                }).build();
+    }
+
+    @Bean
+    public Step save_file_compreBuzz() {
+        return stepBuilderFactory.get("save_file_compreBuzz")
+                .tasklet((contribution, chunkContext) -> {
+                    List<CompreBuzzMapping> mappings = compreBuzzMappingRepository.findAll();
+
+                    try {
+                        DocumentBuilderFactory docFactory = DocumentBuilderFactory.newInstance();
+                        DocumentBuilder docBuilder = docFactory.newDocumentBuilder();
+
+                        // 루트 엘리먼트
+                        Document doc = docBuilder.newDocument();
+                        Element root = doc.createElement("data");
+                        doc.appendChild(root);
+
+                        for (CompreBuzzMapping mapping : mappings) {
+                            CompreBuzz buzz = mapping.getCompreBuzz();
+
+                            // row element
+                            Element row = doc.createElement("row");
+                            root.appendChild(row);
+
+                            row.appendChild(createTextNode(doc, "href", buzz.getHref()));
+                            row.appendChild(createTextNode(doc, "program", buzz.getProgram()));
+                            row.appendChild(createTextNode(doc, "content_id", mapping.getContentId()));
+                            row.appendChild(createTextNode(doc, "contentset_id", mapping.getContentsetId()));
+                            row.appendChild(createTextNode(doc, "channel", buzz.getChannel()));
+                            row.appendChild(createTextNode(doc, "days", buzz.getDays()));
+                            row.appendChild(createTextNode(doc, "post", buzz.getPost()));
+                            row.appendChild(createTextNode(doc, "comment", buzz.getComment()));
+                            row.appendChild(createTextNode(doc, "video_view", buzz.getVideoView()));
+                            row.appendChild(createTextNode(doc, "news", buzz.getNews()));
+                            row.appendChild(createTextNode(doc, "video", buzz.getVideo()));
+                            row.appendChild(createTextNode(doc, "family", buzz.getFamily()));
+                            row.appendChild(createTextNode(doc, "individual", buzz.getIndividual()));
+                            row.appendChild(createTextNode(doc, "man", buzz.getMan()));
+                            row.appendChild(createTextNode(doc, "woman", buzz.getWoman()));
+                            row.appendChild(createTextNode(doc, "teenager", buzz.getTeenager()));
+                            row.appendChild(createTextNode(doc, "twenties", buzz.getTwenties()));
+                            row.appendChild(createTextNode(doc, "thirties", buzz.getThirties()));
+                            row.appendChild(createTextNode(doc, "fourties", buzz.getFourties()));
+                            row.appendChild(createTextNode(doc, "fifties", buzz.getFifties()));
+                            row.appendChild(createTextNode(doc, "sixties", buzz.getSixties()));
+                            row.appendChild(createTextNode(doc, "tv_vod", buzz.getTvVod()));
+                            row.appendChild(createTextNode(doc, "pc_live", buzz.getPcLive()));
+                            row.appendChild(createTextNode(doc, "pc_vod", buzz.getPcVod()));
+                            row.appendChild(createTextNode(doc, "mobile_vod", buzz.getMobileVod()));
+                            row.appendChild(createTextNode(doc, "genre", buzz.getGenre()));
+                            row.appendChild(createTextNode(doc, "start_date", buzz.getStartDate()));
+                            row.appendChild(createTextNode(doc, "end_date", buzz.getEndDate()));
+                            row.appendChild(createTextNode(doc, "director", buzz.getDirector()));
+                            row.appendChild(createTextNode(doc, "writer", buzz.getWriter()));
+                            row.appendChild(createTextNode(doc, "casts", buzz.getCasts()));
+
+                        }
+
+                        // XML 파일로 쓰기
+                        TransformerFactory transformerFactory = TransformerFactory.newInstance();
+                        Transformer transformer = transformerFactory.newTransformer();
+                        transformer.setOutputProperty(OutputKeys.ENCODING, "UTF-8");
+                        transformer.setOutputProperty(OutputKeys.INDENT, "yes");
+                        DOMSource source = new DOMSource(doc);
+                        StreamResult result = new StreamResult(new FileOutputStream(new File("comprebuzz.xml")));
+                        transformer.transform(source, result);
+
+                        amazonS3Service.upload("comprebuzz.xml");
+
+                    } catch (ParserConfigurationException pce) {
+                        pce.printStackTrace();
+                    } catch (TransformerException tfe) {
+                        tfe.printStackTrace();
+                    }
+                    return RepeatStatus.FINISHED;
+                })
+                .build();
+    }
+
+    @Bean
+    public Step save_file_relatedWord() {
+        return stepBuilderFactory.get("save_file_relatedWord")
+                .tasklet((contribution, chunkContext) -> {
+                    List<RelatedWordMapping> mappings = relatedWordMappingRepository.findAll();
+
+                    try {
+                        DocumentBuilderFactory docFactory = DocumentBuilderFactory.newInstance();
+                        DocumentBuilder docBuilder = docFactory.newDocumentBuilder();
+
+                        // 루트 엘리먼트
+                        Document doc = docBuilder.newDocument();
+                        Element root = doc.createElement("data");
+                        doc.appendChild(root);
+
+                        for (RelatedWordMapping mapping : mappings) {
+                            RelatedWord word = mapping.getRelatedWord();
+
+                            // row element
+                            Element row = doc.createElement("row");
+                            root.appendChild(row);
+
+                            row.appendChild(createTextNode(doc, "href", word.getHref()));
+                            row.appendChild(createTextNode(doc, "word", word.getWord()));
+                            row.appendChild(createTextNode(doc, "word_class", word.getWordClass()));
+                            row.appendChild(createTextNode(doc, "content_id", mapping.getContentId()));
+                            row.appendChild(createTextNode(doc, "contentset_id", mapping.getContentsetId()));
+                            row.appendChild(createTextNode(doc, "program", word.getProgram()));
+                            row.appendChild(createTextNode(doc, "priority", word.getPriority()));
+                            row.appendChild(createTextNode(doc, "channel", word.getChannel()));
+                            row.appendChild(createTextNode(doc, "days", word.getDays()));
+                            row.appendChild(createTextNode(doc, "amount",word.getAmount()));
+                            row.appendChild(createTextNode(doc, "genre", word.getGenre()));
+                            row.appendChild(createTextNode(doc, "start_date", word.getStartDate()));
+                            row.appendChild(createTextNode(doc, "end_date", word.getEndDate()));
+                            row.appendChild(createTextNode(doc, "director", word.getDirector()));
+                            row.appendChild(createTextNode(doc, "writer", word.getWriter()));
+                            row.appendChild(createTextNode(doc, "casts", word.getCasts()));
+
+                        }
+
+                        // XML 파일로 쓰기
+                        TransformerFactory transformerFactory = TransformerFactory.newInstance();
+                        Transformer transformer = transformerFactory.newTransformer();
+                        transformer.setOutputProperty(OutputKeys.ENCODING, "UTF-8");
+                        transformer.setOutputProperty(OutputKeys.INDENT, "yes");
+                        DOMSource source = new DOMSource(doc);
+                        StreamResult result = new StreamResult(new FileOutputStream(new File("relatedWord.xml")));
+                        transformer.transform(source, result);
+
+                        amazonS3Service.upload("relatedWord.xml");
+
+                    } catch (ParserConfigurationException pce) {
+                        pce.printStackTrace();
+                    } catch (TransformerException tfe) {
+                        tfe.printStackTrace();
+                    }
+                    return RepeatStatus.FINISHED;
+                })
+                .build();
+    }
+
 }

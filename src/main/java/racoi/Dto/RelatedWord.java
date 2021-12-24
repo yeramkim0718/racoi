@@ -15,18 +15,16 @@ import java.util.List;
 
 public class RelatedWord {
 
-    @Id
-    @Column(length = 100)
+    @Id @Column(length = 100)
     private String channel;
-    @Id
-    @Column(length = 100)
+    @Id @Column(length = 100)
     private String days;
-    @Id
-    @Column(length = 100)
+    @Id @Column(length = 100)
     private String priority;
-    @Id
-    @Column(length = 100)
+    @Id @Column(length = 100)
     private String program;
+    @Id @Column (length = 100)
+    private String wordClass;
 
     private String word;
     private String amount;

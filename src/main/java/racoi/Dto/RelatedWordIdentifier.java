@@ -13,22 +13,24 @@ public class RelatedWordIdentifier implements Serializable {
     private String days;
     private String priority;
     private String program;
+    private String wordClass;
 
     public RelatedWordIdentifier() {
 
     }
 
-    public RelatedWordIdentifier(String channel, String days, String priority, String program) {
+    public RelatedWordIdentifier(String channel, String days, String priority, String program, String wordClass) {
         this.priority = priority;
         this.program = program;
         this.channel = channel;
         this.days = days;
+        this.wordClass = wordClass;
 
     }
 
     @Override
     public int hashCode() {
-        String identifier = channel.concat(days).concat(priority).concat(program);
+        String identifier = channel.concat(days).concat(priority).concat(program).concat(wordClass);
         return identifier.hashCode();
     }
 
@@ -43,7 +45,8 @@ public class RelatedWordIdentifier implements Serializable {
         return Objects.equals(priority, relatedWordIdentifier.getPriority()) &&
                 Objects.equals(channel, relatedWordIdentifier.getChannel()) &&
                 Objects.equals(days, relatedWordIdentifier.getDays()) &&
-                Objects.equals(program, relatedWordIdentifier.getProgram());
+                Objects.equals(program, relatedWordIdentifier.getProgram()) &&
+                Objects.equals(wordClass, relatedWordIdentifier.getWordClass());
 
     }
 }
