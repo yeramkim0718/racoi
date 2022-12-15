@@ -1,6 +1,6 @@
 # racoi
 
-racoi crawling 및 API 호출 하여 TV 내 프로그램 정보와 matching 작업 
+racoi crawling 및 API 호출 하여 TV 내 프로그램 정보와 matching 작업 (content_id, content_set_id)
 
 1. 인터넷 반응
 https://www.racoi.or.kr/kobaco/nreport/ibuzz.do
